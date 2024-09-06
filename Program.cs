@@ -22,7 +22,7 @@ namespace TaskManager
 
             MessageService messageService = new MessageService();
 
-            // Creating a taskItem
+            // Creating a taskItem   
             taskManager.TaskOperatorEvent += messageService.OnTaskCreated;
 
             Console.WriteLine("Starting taskItem creation...");
