@@ -1,12 +1,16 @@
 ﻿
 
 /*
-* For each CRUD operation, define an event, and when this event will be triggered, use asyc call to save into a file  
-* V can add SQL to save the queries 
+
+* V can add SQL to save the queries
+* Exception Handling
+* Can use Akka to send messaged from TaskManager to MessageService
  
+** For each CRUD operation, define an event, and when this event will be triggered, use asyc call to save into a file **
+
 */
 
-using System.Linq;
+using System;
 
 namespace TaskManager
 {
@@ -23,7 +27,7 @@ namespace TaskManager
             MessageService messageService = new MessageService();
 
             // Creating a taskItem   
-            taskManager.TaskOperatorEvent += messageService.OnTaskCreated;
+            taskManager.TaskOperatorEvent += messageService.UpdateUserWithFileAndConsole;
 
             Console.WriteLine("Starting taskItem creation...");
             Thread.Sleep(2000);
@@ -32,18 +36,19 @@ namespace TaskManager
             taskManager.CreateTask("My taskItem 2");
             taskManager.CreateTask("My taskItem 3");
             taskManager.CreateTask("My taskItem 4");
+            taskManager.CreateTask("\n");
             //taskManager.CreateTask("************************\n");
-            taskManager.TaskOperatorEvent -= messageService.OnTaskCreated;
+            taskManager.TaskOperatorEvent -= messageService.UpdateUserWithFileAndConsole;
 
             // Deleting a taskItem
-            taskManager.TaskOperatorEvent += messageService.OnTaskDeleted;
-            taskManager.DeleteTask();
-            taskManager.TaskOperatorEvent -= messageService.OnTaskDeleted;
+            //taskManager.TaskOperatorEvent += messageService.OnTaskDeleted;
+            //taskManager.DeleteTask();
+            //taskManager.TaskOperatorEvent -= messageService.OnTaskDeleted;
 
             // Updating a task
-            taskManager.TaskOperatorEvent += messageService.OnTaskUpdated;
-            taskManager.UpdateTask("My taskItem 4", "My taskItem 4.1");
-            taskManager.TaskOperatorEvent -= messageService.OnTaskUpdated;
+            //taskManager.TaskOperatorEvent += messageService.OnTaskUpdated;
+            //taskManager.UpdateTask("My taskItem 4", "My taskItem 4.1");
+            //taskManager.TaskOperatorEvent -= messageService.OnTaskUpdated;
 
             // Reading a task
             /*
@@ -52,8 +57,8 @@ namespace TaskManager
                 2. Return the complete object
                 3. If the task doesn't found, send the empty TaskItem to Subscriber, so that the user can be notified about the result
              */
-            taskManager.TaskOperatorEvent += messageService.OnTaskFound;
-            taskManager.GetTaskItem("My taskItem 3");
+            //taskManager.TaskOperatorEvent += messageService.OnTaskFound;
+            //taskManager.GetTaskItem("My taskItem 3");
 
         }
     }
@@ -104,9 +109,11 @@ namespace TaskManager
             //Console.WriteLine("Enter new taskItem name");
             //string newTaskName = Console.ReadLine();
 
-            TaskItem newTask = new TaskItem() { Name = newTaskName };
+            TaskItem newTask = new TaskItem() { Name = newTaskName, Id = Guid.NewGuid() };
+            newTask.taskOperationsString = newTask.GetTaskOperationsString(TaskOperations.Create);
+            Console.WriteLine(newTask.ToString());
             
-            Console.WriteLine("Starting taskItem creation...");
+            //Console.WriteLine("Starting taskItem creation...");
             
             taskList.Add(newTask);
 
@@ -178,34 +185,51 @@ namespace TaskManager
 
     }
 
+    // Subscriber
     public class MessageService
     {
-        public void OnTaskCreated(object source, TaskItem task)
-        {
-            Console.WriteLine($"New taskItem : {task.Name} created");
-        }
 
-        public void OnTaskDeleted(object source, TaskItem task)
+        public void UpdateUserWithFileAndConsole(object source, TaskItem taskItem)
         {
-            Console.WriteLine($"TaskItem : {task.Name} deleted successfully");
-        }
-
-        public void OnTaskUpdated(object source, TaskItem oldTask)
-        {
-            Console.WriteLine($"TaskItem : {oldTask.Name} is updated");
-        }
-
-        public void OnTaskFound(object source, TaskItem task)
-        {
-            if (task == null)
+            TaskCompletionStatus taskCompletionStatus = SaveIntoFile(taskItem, taskItem.taskOperationsString).Result;  // ** do this async way
+            
+            switch (taskCompletionStatus)
             {
-                Console.WriteLine($"No task found for the given input");
-            };
-
-            Console.WriteLine($"Task item found: {task.Name}");
+                case TaskCompletionStatus.Success:
+                    PrintToConsole(taskItem.taskOperationsString, taskItem);
+                    break;
+                case TaskCompletionStatus.Failure:
+                    string taskFailureString = taskItem.GetTaskCompletionStatusString(TaskCompletionStatus.Failure);
+                    PrintToConsole(taskFailureString, taskItem);
+                    break;
+            }
         }
 
-    }
+        private void PrintToConsole(string taskStausString, TaskItem taskItem)
+        {
+            Console.WriteLine(taskStausString + taskItem?.Name);
+        }
+
+        private async Task<TaskCompletionStatus> SaveIntoFile(TaskItem taskItem, string taskStatusString)     // what if this method fails to save to a file
+        {
+            string docPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            try
+            {
+                using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "TaskManagerOperations.txt"), true))
+                {
+                    DateTime currentTime = DateTime.Now;
+                    await outputFile.WriteLineAsync(taskItem.Id + "\t" + taskStatusString + taskItem.Name + "\t" + currentTime.ToString());
+                }
+                return TaskCompletionStatus.Success;
+            }
+            catch (Exception ex)
+            {
+                await Console.Out.WriteLineAsync("Can't write to the file: " + ex.Message);
+                return TaskCompletionStatus.Failure;
+            }
+        }
+
+}
 
     public class Utility
     {
@@ -218,6 +242,61 @@ namespace TaskManager
     public class TaskItem : EventArgs
     {
         public string Name;
+
+        public Guid Id;
+
+        public string taskOperationsString;
+
+        public string GetTaskOperationsString(TaskOperations taskOperations)    // which is the better approach, curate the result string till the end of the method and then return it, or once a case is matched, returned immediately.
+        {
+            switch (taskOperations)
+            {
+                case TaskOperations.Create:
+                    return "New task created: ";
+                //break;
+                case TaskOperations.Delete:
+                    return "Task deleted: ";
+                case TaskOperations.Update:
+                    return "Task updated: ";
+                case TaskOperations.Read:
+                    return "Task reading complete.";
+                default:
+                    return "Unknown task operation.";
+            }
+        }
+
+        public string GetTaskCompletionStatusString(TaskCompletionStatus taskCompletionStatus)
+        {
+            switch (taskCompletionStatus)
+            {
+                case TaskCompletionStatus.Success:
+                    return "Task completed successfully.";
+                case TaskCompletionStatus.Failure:
+                    return "Task failed.";
+                default:
+                    return "Unknown task status";
+            }
+        }
+
+        public override string ToString()
+        {
+            return $"Id: {Id} \tTask: {Name}";
+        }
+
+    }
+
+    public enum TaskCompletionStatus
+    {
+        Success,
+        Failure
+    }
+
+    public enum TaskOperations
+    {
+        Create, 
+        Delete, 
+        Update,
+        Read,
     }
 }
 
