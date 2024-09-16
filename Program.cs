@@ -4,13 +4,21 @@
 
 * V can add SQL to save the queries
 * Exception Handling
-* Can use Akka to send messaged from TaskManager to MessageService
+* Can use Akka to send messaged from TaskManager to MessageService(between different components)
+    1. TaskManager
+    2. MessageService
+    3. DBManager
+    Each will be having their communication actor
+* Can use an API which will generate random names for tasks
+* Check where we could have used and Interface
  
 ** For each CRUD operation, define an event, and when this event will be triggered, use asyc call to save into a file **
 
 */
 
 using System;
+using System.Dynamic;
+//using System.Windows.Forms;     // not working even after adding the reference
 
 namespace TaskManager
 {
@@ -21,24 +29,25 @@ namespace TaskManager
     {
         public static void Main(string[] args)
         {
-
             TaskManager taskManager = new TaskManager();
 
             MessageService messageService = new MessageService();
 
+            TaskItemRepository taskItemRepository = new TaskItemRepository();   
+
             // Creating a taskItem   
-            taskManager.TaskOperatorEvent += messageService.UpdateUserWithFileAndConsole;
+            //taskManager.TaskOperatorEvent += messageService.UpdateUserWithFileAndConsole;
 
-            Console.WriteLine("Starting taskItem creation...");
-            Thread.Sleep(2000);
+            //Console.WriteLine("Starting taskItem creation...");
+            //Thread.Sleep(2000);
 
-            taskManager.CreateTask("My taskItem 1");
-            taskManager.CreateTask("My taskItem 2");
-            taskManager.CreateTask("My taskItem 3");
-            taskManager.CreateTask("My taskItem 4");
-            taskManager.CreateTask("\n");
-            //taskManager.CreateTask("************************\n");
-            taskManager.TaskOperatorEvent -= messageService.UpdateUserWithFileAndConsole;
+            //taskManager.CreateTask("My taskItem 1");
+            //taskManager.CreateTask("My taskItem 2");
+            //taskManager.CreateTask("My taskItem 3");
+            //taskManager.CreateTask("My taskItem 4");
+            ////taskManager.CreateTask("\n");
+            ////taskManager.CreateTask("************************\n");
+            //taskManager.TaskOperatorEvent -= messageService.UpdateUserWithFileAndConsole;
 
             // Deleting a taskItem
             //taskManager.TaskOperatorEvent += messageService.OnTaskDeleted;
@@ -53,13 +62,15 @@ namespace TaskManager
             // Reading a task
             /*
              Algorithm: 
-                1. Send the string of the task to be searched for 
-                2. Return the complete object
-                3. If the task doesn't found, send the empty TaskItem to Subscriber, so that the user can be notified about the result
-             */
-            //taskManager.TaskOperatorEvent += messageService.OnTaskFound;
-            //taskManager.GetTaskItem("My taskItem 3");
+                *. Send the string of the task to be searched for 
+                *. Search the task and Return the Id of the task
+                *. If the task doesn't found, send the empty TaskItem to Subscriber, so that the user can be notified about the result
+                * 
 
+             */
+            //taskManager.TaskOperatorEvent += messageService.GetTaskAndUpdateConsole;
+            //taskManager.GetTaskItemId("My taskItem 3");
+            //Console.ReadLine();
         }
     }
 
@@ -67,6 +78,8 @@ namespace TaskManager
     public class TaskManager
     {
         public event TaskOperatorEventHandler TaskOperatorEvent;
+
+        TaskItemRepository taskItemRepository = new TaskItemRepository();
 
         private List<TaskItem> taskList = new List<TaskItem>();
 
@@ -159,18 +172,18 @@ namespace TaskManager
         #endregion
 
         #region Reading a Task
-        public TaskItem GetTaskItem(string taskName)
+        public async Task GetTaskItemId(string taskName)
         {
-            var foundTask = taskList.Find(_ => _.Name.Equals(taskName));
+            var foundTaskId = await taskItemRepository.GetTaskId(taskName);           // can make this asynchronous
+            //MessageBox
+            Console.WriteLine(foundTaskId);
 
-            OnTaskFound(foundTask);             // can make this asynchronous
+            //if (foundTask != null)
+            //{
+            //    return foundTask;
+            //}
 
-            if (foundTask != null)
-            {
-                return foundTask;
-            }
-
-            return null;
+            //return null;
         }
 
         public void OnTaskFound(TaskItem taskItem)
@@ -191,7 +204,8 @@ namespace TaskManager
 
         public void UpdateUserWithFileAndConsole(object source, TaskItem taskItem)
         {
-            TaskCompletionStatus taskCompletionStatus = SaveIntoFile(taskItem, taskItem.taskOperationsString).Result;  // ** do this async way
+            var taskItemRepository = new TaskItemRepository();
+            TaskCompletionStatus taskCompletionStatus = taskItemRepository.SaveIntoFile(taskItem, taskItem.taskOperationsString).Result;  // ** do this async way    // ** Calling TaskItemRepository is not the work of this class. This class is intended for Message only
             
             switch (taskCompletionStatus)
             {
@@ -210,15 +224,28 @@ namespace TaskManager
             Console.WriteLine(taskStausString + taskItem?.Name);
         }
 
-        private async Task<TaskCompletionStatus> SaveIntoFile(TaskItem taskItem, string taskStatusString)     // what if this method fails to save to a file
+        public void GetTaskAndUpdateConsole(object source, TaskItem taskItem)
         {
-            string docPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            TaskItemRepository taskItemRepository = new TaskItemRepository();
+
+            var TaskId = taskItemRepository.GetTaskId(taskItem.Name);
+        }
+
+    }
+
+    public class TaskItemRepository
+    {
+        //string docPath = 
+        string filePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "TaskManagerOperations.txt");
+
+        public async Task<TaskCompletionStatus> SaveIntoFile(TaskItem taskItem, string taskStatusString)     // what if this method fails to save to a file
+        {   
             try
             {
-                using (StreamWriter outputFile = new StreamWriter(Path.Combine(docPath, "TaskManagerOperations.txt"), true))
+                using (StreamWriter outputFile = new StreamWriter(filePath, true))
                 {
                     DateTime currentTime = DateTime.Now;
-                    await outputFile.WriteLineAsync(taskItem.Id + "\t" + taskStatusString + taskItem.Name + "\t" + currentTime.ToString());
+                    await outputFile.WriteLineAsync(taskItem.Id + " , " + taskStatusString + taskItem.Name + " , " + currentTime.ToString());
                 }
                 return TaskCompletionStatus.Success;
             }
@@ -229,7 +256,55 @@ namespace TaskManager
             }
         }
 
-}
+        public async Task<string[]> GetTaskItems()
+        {
+            var foundTasks = await File.ReadAllTextAsync(filePath);
+
+            string[] taskItems = foundTasks.Split('\n');
+
+            return taskItems;
+        }
+
+        public async Task<string> GetTaskId(string taskName)
+        {
+            try
+            {
+                //var foundTasks = await File.ReadAllTextAsync(filePath);
+
+                /*
+                    * V will be getting a string of all task items
+                    * Split the string based on "\n". Now we are having individual task items as strings. Split will return an array
+                    * TR this array of individual taskItem, 
+                        * Split the current taskItem based on "," 
+                        * Remove the spaces around each text
+                        * Compare the Name of the current task item with the item V want to find
+                        * If matched, return the id of the current item
+                */
+
+                //string[] taskItems = foundTasks.Split("\n");
+                string[] taskItems = await GetTaskItems();
+
+                foreach (var taskItem in taskItems)
+                {
+                    string[] currentTaskItemDetails = taskItem.Split(",");
+
+                    if (currentTaskItemDetails[1].Trim().Contains(taskName))
+                    {
+                        //await Console.Out.WriteLineAsync();
+                        return currentTaskItemDetails[0].Trim();
+                    }
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                await Console.Out.WriteLineAsync(ex.Message);
+            }
+
+            return null;
+        }
+    }
 
     public class Utility
     {
